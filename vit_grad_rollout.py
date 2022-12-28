@@ -1,11 +1,9 @@
 import torch
-from PIL import Image
-import numpy
-import sys
-from torchvision import transforms
 import numpy as np
-import cv2
+import torchsnooper
 
+
+@torchsnooper.snoop()
 def grad_rollout(attentions, gradients, discard_ratio):
     result = torch.eye(attentions[0].size(-1))
     with torch.no_grad():
@@ -34,6 +32,7 @@ def grad_rollout(attentions, gradients, discard_ratio):
     mask = mask.reshape(width, width).numpy()
     mask = mask / np.max(mask)
     return mask    
+
 
 class VITAttentionGradRollout:
     def __init__(self, model, attention_layer_name='attn_drop',

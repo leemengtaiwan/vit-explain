@@ -1,11 +1,9 @@
 import torch
-from PIL import Image
-import numpy
-import sys
-from torchvision import transforms
 import numpy as np
-import cv2
+import torchsnooper
 
+
+# @torchsnooper.snoop()
 def rollout(attentions, discard_ratio, head_fusion):
     result = torch.eye(attentions[0].size(-1))
     with torch.no_grad():
@@ -18,11 +16,14 @@ def rollout(attentions, discard_ratio, head_fusion):
                 attention_heads_fused = attention.min(axis=1)[0]
             else:
                 raise "Attention head fusion type Not supported"
+            # (B, N, N)
 
             # Drop the lowest attentions, but
             # don't drop the class token
-            flat = attention_heads_fused.view(attention_heads_fused.size(0), -1)
-            _, indices = flat.topk(int(flat.size(-1)*discard_ratio), -1, False)
+            flat = attention_heads_fused.view(
+                attention_heads_fused.size(0), -1)  # (B, N^2)
+            _, indices = flat.topk(
+                int(flat.size(-1)*discard_ratio), -1, largest=False)  # (B, N^2)
             indices = indices[indices != 0]
             flat[0, indices] = 0
 
@@ -34,14 +35,16 @@ def rollout(attentions, discard_ratio, head_fusion):
     
     # Look at the total attention between the class token,
     # and the image patches
-    mask = result[0, 0 , 1 :]
+    mask = result[0, 0, 1:]
     # In case of 224x224 image, this brings us from 196 to 14
     width = int(mask.size(-1)**0.5)
     mask = mask.reshape(width, width).numpy()
     mask = mask / np.max(mask)
-    return mask    
+    return mask
+
 
 class VITAttentionRollout:
+    # https://github.com/facebookresearch/deit/blob/ee8893c8063f6937fec7096e47ba324c206e22b9/cait_models.py#L99
     def __init__(self, model, attention_layer_name='attn_drop', head_fusion="mean",
         discard_ratio=0.9):
         self.model = model

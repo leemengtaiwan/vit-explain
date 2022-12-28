@@ -1,5 +1,5 @@
 import argparse
-import sys
+import time
 import torch
 from PIL import Image
 from torchvision import transforms
@@ -9,10 +9,13 @@ import cv2
 from vit_rollout import VITAttentionRollout
 from vit_grad_rollout import VITAttentionGradRollout
 
+
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--use_cuda', action='store_true', default=False,
                         help='Use NVIDIA GPU acceleration')
+    parser.add_argument('--use_mps', action='store_true', default=False,
+                        help='Mac M1')
     parser.add_argument('--image_path', type=str, default='./examples/both.png',
                         help='Input image path')
     parser.add_argument('--head_fusion', type=str, default='max',
@@ -22,14 +25,22 @@ def get_args():
                         help='How many of the lowest 14x14 attention paths should we discard')
     parser.add_argument('--category_index', type=int, default=None,
                         help='The category index for gradient rollout')
+    parser.add_argument('--device', type=str, default="cpu")
     args = parser.parse_args()
     args.use_cuda = args.use_cuda and torch.cuda.is_available()
+    args.use_mps = args.use_mps and torch.backends.mps.is_available()
     if args.use_cuda:
         print("Using GPU")
+        args.device = "cuda"
+    elif args.use_mps:
+        print("Using MPS")
+        args.device = "mps"
     else:
         print("Using CPU")
+        args.device = "cpu"
 
     return args
+
 
 def show_mask_on_image(img, mask):
     img = np.float32(img) / 255
@@ -39,14 +50,17 @@ def show_mask_on_image(img, mask):
     cam = cam / np.max(cam)
     return np.uint8(255 * cam)
 
+
 if __name__ == '__main__':
     args = get_args()
-    model = torch.hub.load('facebookresearch/deit:main', 
-        'deit_tiny_patch16_224', pretrained=True)
+    model = torch.hub.load(
+        'facebookresearch/deit:main',
+        'deit_tiny_patch16_224',
+        pretrained=True
+    )
     model.eval()
 
-    if args.use_cuda:
-        model = model.cuda()
+    model = model.to(args.device)
 
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
@@ -56,22 +70,28 @@ if __name__ == '__main__':
     img = Image.open(args.image_path)
     img = img.resize((224, 224))
     input_tensor = transform(img).unsqueeze(0)
-    if args.use_cuda:
-        input_tensor = input_tensor.cuda()
+    input_tensor = input_tensor.to(args.device)
+
+    since = time.time()
 
     if args.category_index is None:
         print("Doing Attention Rollout")
-        attention_rollout = VITAttentionRollout(model, head_fusion=args.head_fusion, 
+        attention_rollout = VITAttentionRollout(
+            model,
+            head_fusion=args.head_fusion,
             discard_ratio=args.discard_ratio)
         mask = attention_rollout(input_tensor)
-        name = "attention_rollout_{:.3f}_{}.png".format(args.discard_ratio, args.head_fusion)
+        name = "attention_rollout_{:.3f}_{}.png".format(
+            args.discard_ratio, args.head_fusion)
     else:
         print("Doing Gradient Attention Rollout")
-        grad_rollout = VITAttentionGradRollout(model, discard_ratio=args.discard_ratio)
-        mask = grad_rollout(input_tensor, args.category_index)
-        name = "grad_rollout_{}_{:.3f}_{}.png".format(args.category_index,
-            args.discard_ratio, args.head_fusion)
+        grad_rollout = VITAttentionGradRollout(
+            model,
+            discard_ratio=args.discard_ratio)
 
+        mask = grad_rollout(input_tensor, args.category_index)
+        name = "grad_rollout_{}_{:.3f}_{}.png".format(
+            args.category_index, args.discard_ratio, args.head_fusion)
 
     np_img = np.array(img)[:, :, ::-1]
     mask = cv2.resize(mask, (np_img.shape[1], np_img.shape[0]))
@@ -80,4 +100,6 @@ if __name__ == '__main__':
     cv2.imshow(name, mask)
     cv2.imwrite("input.png", np_img)
     cv2.imwrite(name, mask)
-    cv2.waitKey(-1)
+    # cv2.waitKey(-1)
+
+    print(f"elapsed: {time.time() - since}")
